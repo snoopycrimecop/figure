@@ -368,7 +368,7 @@ export async function renderZarrToSrc(source, attrs, theZ, theT, channels, rect,
       activeChIndicies.push(index);
       colors.push(hexToRGB(ch.color));
       minMaxValues.push([ch.window.start, ch.window.end]);
-      luts.push(ch.color.endsWith(".lut") ? ch.color : undefined);
+      luts.push(ch.color.endsWith(".lut") ? omezarr.getLutRgb(ch.color) : undefined);
       inverteds.push(ch.reverseIntensity);
     }
   });
@@ -430,16 +430,13 @@ export async function renderZarrToSrc(source, attrs, theZ, theT, channels, rect,
     // If we have requested slice in cache, return that instead of loading chunks...
     if (ZARR_DATA_CACHE[cacheKey]) {
       if (ZARR_DATA_CACHE[cacheKey] !== "pending") {
-        console.log("RETURN cache!", ZARR_DATA_CACHE[cacheKey]);
         return ZARR_DATA_CACHE[cacheKey];
       } else {
         // data is pending...
-        console.log("PENDING cache...", cacheKey);
         // wait until data is populated, check every 100ms
         return new Promise((resolve, reject) => {
           let checkInterval = setInterval(() => {
             if (ZARR_DATA_CACHE[cacheKey] && ZARR_DATA_CACHE[cacheKey] !== "pending") {
-              console.log("RESOLVE pending cache!", ZARR_DATA_CACHE[cacheKey]);
               clearInterval(checkInterval);
               resolve(ZARR_DATA_CACHE[cacheKey]);
             }
@@ -451,7 +448,6 @@ export async function renderZarrToSrc(source, attrs, theZ, theT, channels, rect,
     // "pending" flag to avoid duplicate loads
     ZARR_DATA_CACHE[cacheKey] = "pending";
     return zarr.get(arr, slices).then((data) => {
-      console.log("populate cache...");
       ZARR_DATA_CACHE[cacheKey] = data;
       return data;
     });
@@ -459,14 +455,14 @@ export async function renderZarrToSrc(source, attrs, theZ, theT, channels, rect,
 
   let ndChunks = await Promise.all(promises);
   let start = new Date().getTime();
-  let rbgData = omezarr.renderTo8bitArray(
+  let rbgData = omezarr.renderChunks(
     ndChunks,
     minMaxValues,
     colors,
     luts,
     inverteds
   );
-  console.log("renderTo8bitArray took", new Date().getTime() - start, "ms");
+  console.log("renderChunks took", new Date().getTime() - start, "ms");
 
   let chunk_width = ndChunks[0].shape.at(-1);
   let chunk_height = ndChunks[0].shape.at(-2);

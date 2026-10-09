@@ -26,7 +26,9 @@
         showModal,
         hideModals,
         hideModal,
-        updateRoiIds} from "./util";
+        updateRoiIds,
+        downloadAsFile} from "./util";
+    import {buildFigurePdf} from "../export/figure_to_pdf";
     const RELEASE_VERSION = import.meta.env.VITE_VERSION;
 
     // This extends Backbone to support keyboardEvents
@@ -313,22 +315,41 @@
                 "to OMERO": "OMERO"};
             exportOption = opts[export_opt];
 
-            if (!window.APP_SERVED_BY_OMERO) {
-                let title = "Figure Export Options";
-                let buttons = ["OK"];
-                let message = `The standalone app doesn't support export to PDF or TIFF.
-                <p>You can download the figure via 'Save' and run the figure export script on your local machine.</p>
-                <p>For more details, see the
-                <a href="https://github.com/ome/omero-figure?tab=readme-ov-file#run-figure-export-locally" target="_blank">
-                https://github.com/ome/figure/#usage</a>.
-                </p>`;
-
-                figureConfirmDialog(title, message, buttons);
+            // Standalone app OR if jsPDF export is selected...
+            if (!window.APP_SERVED_BY_OMERO || export_opt === "jsPDF") {
+                this.export_pdf_in_browser();
                 return;
             }
 
             var url = MAKE_WEBFIGURE_URL;
             this.run_export_script(url, exportOption);
+        },
+
+        // Client-side PDF export (single page, panels + labels only for now)
+        export_pdf_in_browser: function() {
+            for (let panel of this.model.panels) {
+                if (!panel.get('src')) {
+                    alert("Please wait for all panel images to load before exporting the PDF.");
+                    return;
+                }
+            }
+            let $pdf_inprogress = $("#pdf_inprogress").show();
+            let $create_figure_pdf = $(".export_pdf").hide();
+            let $script_error = $("#script_error").hide();
+
+            let includeSrc = true;
+            this.model.figure_toJSON(includeSrc).then(figureJSON => {
+                return buildFigurePdf(figureJSON).then(blob => {
+                    let fileName = (figureJSON.figureName || "figure") + ".pdf";
+                    downloadAsFile(blob, "application/pdf", fileName);
+                });
+            }).catch(err => {
+                console.error("Error generating PDF:", err);
+                $script_error.show();
+            }).then(() => {
+                $create_figure_pdf.show();
+                $pdf_inprogress.hide();
+            });
         },
 
         run_export_script: function(url, exportOption) {
@@ -338,83 +359,84 @@
             let $pdf_download = $("#pdf_download").hide();
             let $script_error = $("#script_error").hide();
 
-            // Get figure as json
-            var figureJSON = this.model.figure_toJSON();
-            var data = {
+            // Get figure as json - with viewport src data
+            this.model.figure_toJSON(true).then(figureJSON => {
+                var data = {
                     figureJSON: JSON.stringify(figureJSON),
                     exportOption: exportOption,
                 };
 
-            // Start the Figure_To_Pdf.py script
-            $.post( url, data).done(function( data ) {
+                // Start the Figure_To_Pdf.py script
+                $.post( url, data).done(function( data ) {
 
-                // {"status": "in progress", "jobId": "ProcessCallback/64be7a9e-2abb-4a48-9c5e-6d0938e1a3e2 -t:tcp -h 192.168.1.64 -p 64592"}
-                var jobId = data.jobId;
+                    // {"status": "in progress", "jobId": "ProcessCallback/64be7a9e-2abb-4a48-9c5e-6d0938e1a3e2 -t:tcp -h 192.168.1.64 -p 64592"}
+                    var jobId = data.jobId;
 
-                // E.g. Handle 'No Processor Available';
-                if (!jobId) {
-                    if (data.error) {
-                        alert(data.error);
-                    } else {
-                        alert("Error exporting figure");
+                    // E.g. Handle 'No Processor Available';
+                    if (!jobId) {
+                        if (data.error) {
+                            alert(data.error);
+                        } else {
+                            alert("Error exporting figure");
+                        }
+                        $create_figure_pdf.show();
+                        $pdf_inprogress.hide();
+                        return;
                     }
+
+                    // Now we keep polling for script completion, every second...
+
+                    var i = setInterval(function (){
+
+                        $.getJSON(ACTIVITIES_JSON_URL, function(act_data) {
+
+                                var pdf_job = act_data[jobId];
+
+                                // We're waiting for this flag...
+                                if (pdf_job.status == "finished") {
+                                    clearInterval(i);
+
+                                    $create_figure_pdf.show();
+                                    $pdf_inprogress.hide();
+
+                                    // Show result
+                                    if (pdf_job.results.New_Figure) {
+                                        var fa_id = pdf_job.results.New_Figure.id;
+                                        if (pdf_job.results.New_Figure.type === "FileAnnotation") {
+                                            var fa_download = WEBINDEX_URL + "annotation/" + fa_id + "/";
+                                            $pdf_download
+                                                .attr({'href': fa_download, 'data-original-title': 'Download Figure'})
+                                                .show()
+                                                .children('span').prop('class', 'glyphicon glyphicon-download-alt');
+                                        } else if (pdf_job.results.New_Figure.type === "Image") {
+                                            var fa_download = pdf_job.results.New_Figure.browse_url;
+                                            $pdf_download
+                                                .attr({'href': fa_download, 'data-original-title': 'Go to Figure Image'})
+                                                .show()
+                                                .tooltip()
+                                                .children('span').prop('class', 'glyphicon glyphicon-share');
+                                        }
+                                    } else if (pdf_job.stderr) {
+                                        // Only show any errors if NO result
+                                        var stderr_url = WEBINDEX_URL + "get_original_file/" + pdf_job.stderr + "/";
+                                        $script_error.attr('href', stderr_url).show();
+                                    }
+                                }
+
+                                if (act_data.inprogress === 0) {
+                                    clearInterval(i);
+                                }
+
+                            }).fail(function() {
+                                clearInterval(i);
+                            });
+
+                    }, 1000);
+                }).fail(function(err) {
+                    alert("Error starting export script", err);
                     $create_figure_pdf.show();
                     $pdf_inprogress.hide();
-                    return;
-                }
-
-                // Now we keep polling for script completion, every second...
-
-                var i = setInterval(function (){
-
-                    $.getJSON(ACTIVITIES_JSON_URL, function(act_data) {
-
-                            var pdf_job = act_data[jobId];
-
-                            // We're waiting for this flag...
-                            if (pdf_job.status == "finished") {
-                                clearInterval(i);
-
-                                $create_figure_pdf.show();
-                                $pdf_inprogress.hide();
-
-                                // Show result
-                                if (pdf_job.results.New_Figure) {
-                                    var fa_id = pdf_job.results.New_Figure.id;
-                                    if (pdf_job.results.New_Figure.type === "FileAnnotation") {
-                                        var fa_download = WEBINDEX_URL + "annotation/" + fa_id + "/";
-                                        $pdf_download
-                                            .attr({'href': fa_download, 'data-original-title': 'Download Figure'})
-                                            .show()
-                                            .children('span').prop('class', 'glyphicon glyphicon-download-alt');
-                                    } else if (pdf_job.results.New_Figure.type === "Image") {
-                                        var fa_download = pdf_job.results.New_Figure.browse_url;
-                                        $pdf_download
-                                            .attr({'href': fa_download, 'data-original-title': 'Go to Figure Image'})
-                                            .show()
-                                            .tooltip()
-                                            .children('span').prop('class', 'glyphicon glyphicon-share');
-                                    }
-                                } else if (pdf_job.stderr) {
-                                    // Only show any errors if NO result
-                                    var stderr_url = WEBINDEX_URL + "get_original_file/" + pdf_job.stderr + "/";
-                                    $script_error.attr('href', stderr_url).show();
-                                }
-                            }
-
-                            if (act_data.inprogress === 0) {
-                                clearInterval(i);
-                            }
-
-                        }).fail(function() {
-                            clearInterval(i);
-                        });
-
-                }, 1000);
-            }).fail(function(err) {
-                alert("Error starting export script", err);
-                $create_figure_pdf.show();
-                $pdf_inprogress.hide();
+                });
             });
         },
 
@@ -644,7 +666,9 @@
 
         export_json: function(event) {
             event.preventDefault();
-            showExportAsJsonModal(this.model.figure_toJSON());
+            this.model.figure_toJSON().then(figureJSON => {
+                showExportAsJsonModal(figureJSON);
+            });
         },
 
         import_json: function(event) {
