@@ -31,6 +31,7 @@
         initialize: function(opts) {
             // we render on Changes in the model OR selected shape etc.
             this.model.on('destroy', this.remove, this);
+            this.listenTo(this.model, 'change:src', this.render_src);
             this.listenTo(this.model,
                 'change:x change:y change:width change:height change:zoom change:dx change:dy change:rotation change:vertical_flip change:horizontal_flip',
                 this.render_layout);
@@ -195,17 +196,19 @@
             if (this.model.is_big_image()) {
                 this.$img_panel.hide();
             }
-            let timeoutId = setTimeout(() => {
-                $(".image_panel_spinner", this.$el).show();
-            }, 100); // Show spinner only if image load takes longer than 100ms
+
+            $(".image_panel_spinner", this.$el).show();
             this.$img_panel.one("load", function(){
-                clearTimeout(timeoutId);
                 $(".image_panel_spinner", this.$el).hide();
                 this.$img_panel.show();
             }.bind(this));
 
+            // Update 'src' in the model. Applied to img by render_src() below.
             this.model.get_img_src()
-                .then(src => this.$img_panel.attr('src', src));
+                .then(src => {
+                    this.model.set('src', src);
+                    $(".image_panel_spinner", this.$el).hide();
+                });
 
             // if a 'reasonable' dpi is set, we don't pixelate
             if (this.model.get('min_export_dpi') > 100) {
@@ -213,6 +216,13 @@
             } else {
                 this.$img_panel.addClass('pixelated');
             }
+        },
+
+        render_src: function() {
+            this.$img_panel.attr('src', this.model.get('src'));
+
+            // Debugging: test get_viewport_src on each render
+            // this.model.get_viewport_src();
         },
 
         render_labels: function() {
