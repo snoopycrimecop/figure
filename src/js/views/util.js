@@ -216,17 +216,19 @@ $(function(){
     }
 
     // When we load, setup Open With options
-    $.getJSON(WEBGATEWAYINDEX + "open_with/", function(data){
-        if (data && data.open_with_options) {
-            OPEN_WITH = data.open_with_options;
-            // Try to load scripts if specified:
-            OPEN_WITH.forEach(function(ow){
-                if (ow.script_url) {
-                    $.getScript(ow.script_url);
-                }
-            })
-        }
-    });
+    if (window.APP_SERVED_BY_OMERO) {
+        $.getJSON(WEBGATEWAYINDEX + "open_with/", function(data){
+            if (data && data.open_with_options) {
+                OPEN_WITH = data.open_with_options;
+                // Try to load scripts if specified:
+                OPEN_WITH.forEach(function(ow){
+                    if (ow.script_url) {
+                        $.getScript(ow.script_url);
+                    }
+                })
+            }
+        });
+    }
 
 });
 
